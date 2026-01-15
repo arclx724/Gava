@@ -1,5 +1,1 @@
-echo "hydrogram
-tgcrypto
-aiohttp
-motor
-python-dotenv" > requirements.txt
+printf "hydrogram\ntgcrypto\naiohttp\nmotor\npython-dotenv\n" > requirements.txt
