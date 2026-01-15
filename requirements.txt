@@ -1,0 +1,8 @@
+cat <<EOF > requirements.txt
+hydrogram
+tgcrypto
+aiohttp
+motor
+python-dotenv
+EOF
+
