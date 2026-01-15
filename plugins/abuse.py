@@ -1,43 +1,25 @@
-# SPDX-License-Identifier: MIT
-# Copyright (c) 2018-2024 Amano LLC
-
 import asyncio
 import re
 import aiohttp
-from motor.motor_asyncio import AsyncIOMotorClient
 
 from hydrogram import Client, filters
 from hydrogram.enums import ChatMemberStatus, ParseMode
-from hydrogram.types import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-    ChatPrivileges
-)
+from hydrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ChatPrivileges
 
-from config import PREFIXES, SUDOERS
+# Humne ye details config aur database se import kar li hain
+from config import PREFIXES, SUDOERS, OPENROUTER_API_KEY
+from database import (
+    is_abuse_enabled, set_abuse_status, is_user_whitelisted, 
+    add_whitelist, remove_whitelist, get_whitelisted_users, remove_all_whitelist
+)
 from eduu.utils import commands, get_target_user
 from eduu.utils.decorators import require_admin
 from eduu.utils.localization import use_chat_lang
 
-# ---------------- CONFIGURATION ---------------- #
-
-# OpenRouter API Key
-OPENROUTER_API_KEY = "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" 
+# API URL for AI
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-# MongoDB Connection
-MONGO_URI = "mongodb+srv://arclx724_db_user:arclx724_db_user@cluster0.czhpczm.mongodb.net/?appName=Cluster0"
-
-# Connect to Database
-mongo = AsyncIOMotorClient(MONGO_URI)
-db = mongo.get_default_database("Cluster0")
-
-# Collections
-abuse_col = db["abuse_settings"]
-auth_col = db["auth_users"]
-
-# Abusive Words List
+# Abusive Words List (Aapki original list)
 ABUSIVE_WORDS = [
     "madarchod", "Madharchod", "Madharchood", "behenchod", "madherchood", "madherchod", "bhenchod", "maderchod", "mc", "bc", "bsdk", 
     "bhosdike", "bhosdiwala", "chutiya", "chutiyapa", "gandu", "gand", 
@@ -51,40 +33,7 @@ ABUSIVE_WORDS = [
     "bitch", "bastard", "asshole", "motherfucker", "dick", "tmkc", "mkc"
 ]
 
-# ---------------- DATABASE FUNCTIONS ---------------- #
-
-async def is_abuse_enabled(chat_id: int) -> bool:
-    doc = await abuse_col.find_one({"chat_id": chat_id})
-    return doc.get("enabled", False) if doc else False
-
-async def set_abuse_status(chat_id: int, enabled: bool):
-    await abuse_col.update_one(
-        {"chat_id": chat_id},
-        {"$set": {"enabled": enabled}},
-        upsert=True
-    )
-
-async def is_user_whitelisted(chat_id: int, user_id: int) -> bool:
-    doc = await auth_col.find_one({"chat_id": chat_id, "user_id": user_id})
-    return bool(doc)
-
-async def add_whitelist(chat_id: int, user_id: int):
-    await auth_col.update_one(
-        {"chat_id": chat_id, "user_id": user_id},
-        {"$set": {"timestamp": asyncio.get_event_loop().time()}},
-        upsert=True
-    )
-
-async def remove_whitelist(chat_id: int, user_id: int):
-    await auth_col.delete_one({"chat_id": chat_id, "user_id": user_id})
-
-async def get_whitelisted_users(chat_id: int):
-    return auth_col.find({"chat_id": chat_id})
-
-async def remove_all_whitelist(chat_id: int):
-    await auth_col.delete_many({"chat_id": chat_id})
-
-# ---------------- AI HELPER ---------------- #
+# ---------------- AI HELPER (Wahi original logic) ---------------- #
 
 async def check_toxicity_ai(text: str) -> bool:
     if not text:
@@ -133,61 +82,56 @@ async def toggle_abuse_handler(c: Client, m: Message, strings):
         elif arg in ["off", "disable", "no"]:
             new_status = False
         else:
-            await m.reply_text(strings("abuse_invalid_arg"))
+            await m.reply_text("Invalid argument! Use on/off.")
             return
     else:
         current_status = await is_abuse_enabled(m.chat.id)
         new_status = not current_status
 
     await set_abuse_status(m.chat.id, new_status)
-    
-    if new_status:
-        await m.reply_text("Abuse protection has been enabled ✅")
-    else:
-        await m.reply_text("Abuse protection has been disabled ❌")
+    status_text = "enabled ✅" if new_status else "disabled ❌"
+    await m.reply_text(f"Abuse protection has been {status_text}")
 
 
 @Client.on_message(filters.command(["auth", "promote"], PREFIXES) & filters.group)
 @use_chat_lang
 async def auth_user_handler(c: Client, m: Message, strings):
     if m.from_user.id not in SUDOERS:
-        await m.reply_text(strings("abuse_sudo_only"))
+        await m.reply_text("This command is for Sudoers only.")
         return
 
     target_user = await get_target_user(c, m)
     if not target_user:
-        await m.reply_text(strings("abuse_no_user"))
+        await m.reply_text("Please reply to a user or provide their ID.")
         return
 
     await add_whitelist(m.chat.id, target_user.id)
-    # Using Markdown format manual construction
     user_mention = f"[{target_user.first_name}](tg://user?id={target_user.id})"
-    await m.reply_text(strings("abuse_user_authed").format(user=user_mention))
+    await m.reply_text(f"User {user_mention} has been authorized.")
 
 
 @Client.on_message(filters.command("unauth", PREFIXES) & filters.group)
 @use_chat_lang
 async def unauth_user_handler(c: Client, m: Message, strings):
     if m.from_user.id not in SUDOERS:
-        await m.reply_text(strings("abuse_sudo_only"))
+        await m.reply_text("This command is for Sudoers only.")
         return
 
     target_user = await get_target_user(c, m)
     if not target_user:
-        await m.reply_text(strings("abuse_no_user"))
+        await m.reply_text("Please reply to a user or provide their ID.")
         return
 
     await remove_whitelist(m.chat.id, target_user.id)
-    # Using Markdown format manual construction
     user_mention = f"[{target_user.first_name}](tg://user?id={target_user.id})"
-    await m.reply_text(strings("abuse_user_unauthed").format(user=user_mention))
+    await m.reply_text(f"User {user_mention} has been unauthorized.")
 
 
 @Client.on_message(filters.command("authlist", PREFIXES) & filters.group)
 @use_chat_lang
 async def authlist_handler(c: Client, m: Message, strings):
     if m.from_user.id not in SUDOERS:
-        await m.reply_text(strings("abuse_sudo_only"))
+        await m.reply_text("This command is for Sudoers only.")
         return
 
     cursor = await get_whitelisted_users(m.chat.id)
@@ -200,9 +144,9 @@ async def authlist_handler(c: Client, m: Message, strings):
             users.append(f"ID: {doc['user_id']}")
     
     if not users:
-        await m.reply_text(strings("abuse_authlist_empty"))
+        await m.reply_text("Authlist is empty.")
     else:
-        await m.reply_text(strings("abuse_authlist_header") + "\n- " + "\n- ".join(users))
+        await m.reply_text("Authorized Users:\n- " + "\n- ".join(users))
 
 
 @Client.on_message(filters.command("unauthall", PREFIXES) & filters.group)
@@ -210,11 +154,11 @@ async def authlist_handler(c: Client, m: Message, strings):
 async def unauthall_handler(c: Client, m: Message, strings):
     member = await m.chat.get_member(m.from_user.id)
     if member.status != ChatMemberStatus.OWNER and m.from_user.id not in SUDOERS:
-        await m.reply_text(strings("abuse_owner_only"))
+        await m.reply_text("Only the owner can clear the list.")
         return
 
     await remove_all_whitelist(m.chat.id)
-    await m.reply_text(strings("abuse_authlist_cleared"))
+    await m.reply_text("All authorized users have been removed.")
 
 
 # ---------------- MESSAGE WATCHER ---------------- #
@@ -235,47 +179,34 @@ async def abuse_watcher(c: Client, m: Message, strings):
     censored_text = text
     detected_abuse = False
     
-    # 3. Check Local List (Hinglish) & Apply MARKDOWN Spoiler
+    # Check Local List
     for word in ABUSIVE_WORDS:
         pattern = re.compile(r'\b' + re.escape(word) + r'\b', re.IGNORECASE)
         if pattern.search(censored_text):
             detected_abuse = True
-            # ||word|| pixelated spoiler ke liye
             censored_text = pattern.sub(lambda match: f"||{match.group(0)}||", censored_text)
     
-    # 4. Check AI if not locally detected (Fallback)
+    # Check AI if not locally detected
     if not detected_abuse:
         if await check_toxicity_ai(text):
             detected_abuse = True
-            # AI case mein pure text ko spoiler mein daal do
             censored_text = f"||{text}||"
 
-    # 5. Action
     if detected_abuse:
         try:
             await m.delete()
-
-            buttons = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton("➕ Add Me", url=f"https://t.me/{c.me.username}?startgroup=true"),
-                        InlineKeyboardButton("📢 Updates", url="https://t.me/RoboKaty"),
-                    ]
-                ]
-            )
-
-            # Warning Message Creation (MARKDOWN FORMAT FIXED)
-            # Hum user mention manually bana rahe hain: [Name](tg://user?id=123)
-            # Taaki ye ParseMode.MARKDOWN ke saath perfect chale
             user_link = f"[{m.from_user.first_name}](tg://user?id={m.from_user.id})"
-
             warning_text = (
                 f"🚫 Hey {user_link}, your message was removed.\n\n"
                 f"🔍 **Censored:**\n{censored_text}\n\n"
                 f"Please keep the chat respectful."
             )
+            
+            buttons = InlineKeyboardMarkup([[
+                InlineKeyboardButton("➕ Add Me", url=f"https://t.me/{c.me.username}?startgroup=true"),
+                InlineKeyboardButton("📢 Updates", url="https://t.me/RoboKaty")
+            ]])
 
-            # ParseMode.MARKDOWN hi rakha hai taaki ||spoiler|| aur [Name](Link) dono chalein
             warning_msg = await c.send_message(
                 chat_id=m.chat.id,
                 text=warning_text,
@@ -289,13 +220,11 @@ async def abuse_watcher(c: Client, m: Message, strings):
         except Exception as e:
             print(f"Abuse filter error: {e}")
 
-
-# ---------------- REGISTRATION ---------------- #
-
+# Register commands
 commands.add_command("abuse", "admin")
 commands.add_command("auth", "admin")
 commands.add_command("promote", "admin")
 commands.add_command("unauth", "admin")
 commands.add_command("authlist", "admin")
 commands.add_command("unauthall", "admin")
-      
+    
