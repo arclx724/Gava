@@ -1,8 +1,5 @@
-cat <<EOF > requirements.txt
-hydrogram
+echo "hydrogram
 tgcrypto
 aiohttp
 motor
-python-dotenv
-EOF
-
+python-dotenv" > requirements.txt
